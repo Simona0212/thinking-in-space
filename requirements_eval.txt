@@ -1,0 +1,21 @@
+# Core dependencies for VSI-Bench evaluation
+torch>=2.0.0
+transformers>=4.40.0
+accelerate>=0.27.0
+datasets>=2.14.0
+pandas>=2.0.0
+pyarrow>=12.0.0
+numpy>=1.24.0
+tqdm>=4.65.0
+pillow>=10.0.0
+
+# Video processing
+av>=10.0.0
+decord>=0.6.0
+
+# Model-specific dependencies
+qwen-vl-utils  # For Qwen3-VL models
+
+# Optional but recommended
+huggingface-hub>=0.20.0
+safetensors>=0.4.0
