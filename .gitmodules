@@ -10,3 +10,6 @@
 [submodule "transformers"]
 	path = transformers
 	url = git@github.com:huggingface/transformers.git
+[submodule "Bagel"]
+	path = Bagel
+	url = git@github.com:ByteDance-Seed/Bagel.git
