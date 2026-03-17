@@ -95,33 +95,26 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
 
     def load_model(self):
         print(f"Loading {self.model_name}...")
+        from transformers import AutoProcessor, AutoModel
 
-        # Try different import methods for compatibility
-        try:
-            from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
-            model_class = Qwen2VLForConditionalGeneration
-            print("Using Qwen2VLForConditionalGeneration")
-        except ImportError:
-            try:
-                from transformers import AutoProcessor, AutoModelForVision2Seq
-                model_class = AutoModelForVision2Seq
-                print("Using AutoModelForVision2Seq")
-            except ImportError:
-                # Fallback: use AutoModel with trust_remote_code
-                from transformers import AutoProcessor, AutoModel
-                model_class = AutoModel
-                print("Using AutoModel with trust_remote_code=True")
+        # IMPORTANT: Qwen3-VL must use AutoModel with trust_remote_code=True
+        # CLAUDE.md specifies using AutoModel (not AutoModelForImageTextToText which doesn't exist)
+        print("Using AutoModel with trust_remote_code=True (required for Qwen3-VL)")
 
         self.processor = AutoProcessor.from_pretrained(
             self.model_name,
             trust_remote_code=True
         )
-        self.model = model_class.from_pretrained(
+
+        # Use AutoModel to let HuggingFace load the correct Qwen3-VL class
+        # Let the model decide the best dtype automatically
+        self.model = AutoModel.from_pretrained(
             self.model_name,
-            torch_dtype=torch.bfloat16,
+            trust_remote_code=True,
             device_map=self.device,
-            trust_remote_code=True
+            low_cpu_mem_usage=True
         )
+
         self.model.eval()
         print(f"Model loaded on {self.device}")
 
@@ -263,49 +256,26 @@ class LLaVAOneVisionEvaluator(VSIBenchEvaluator):
 
     def load_model(self):
         print(f"Loading {self.model_name}...")
+        from transformers import AutoModel
 
-        # LLaVA-OneVision may need special handling
+        # CLAUDE.md specifies: dtype="auto"
+        print("Using AutoModel with trust_remote_code=True and dtype='auto'")
+
         try:
-            # Try importing LLaVA specific classes
-            from transformers import LlavaOnevisionForConditionalGeneration, AutoProcessor
-            print("Using LlavaOnevisionForConditionalGeneration")
+            from transformers import AutoProcessor
             self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
-            self.model = LlavaOnevisionForConditionalGeneration.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.bfloat16,  # Note: torch_dtype will be auto-converted to dtype
-                device_map=self.device,
-                trust_remote_code=True
-            )
-        except ImportError:
-            # Fallback to AutoModel
-            from transformers import AutoModel, AutoProcessor
-            print("Using AutoModel with trust_remote_code=True")
-            try:
-                self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
-            except:
-                self.processor = None
-                print("Warning: AutoProcessor not available, will process frames manually")
+        except:
+            self.processor = None
+            print("Warning: AutoProcessor not available, will process frames manually")
 
-            # Use dtype instead of torch_dtype for newer transformers
-            try:
-                self.model = AutoModel.from_pretrained(
-                    self.model_name,
-                    trust_remote_code=True,
-                    dtype=torch.bfloat16,  # Use dtype for transformers >= 5.0
-                    device_map=self.device,
-                    low_cpu_mem_usage=True,
-                    attn_implementation="eager"  # Use eager attention to avoid flash-attn issues
-                )
-            except TypeError:
-                # Fallback to torch_dtype for older transformers
-                self.model = AutoModel.from_pretrained(
-                    self.model_name,
-                    trust_remote_code=True,
-                    torch_dtype=torch.bfloat16,
-                    device_map=self.device,
-                    low_cpu_mem_usage=True,
-                    attn_implementation="eager"
-                )
+        # Use dtype="auto" as specified in CLAUDE.md
+        self.model = AutoModel.from_pretrained(
+            self.model_name,
+            trust_remote_code=True,
+            dtype="auto",  # As specified in CLAUDE.md
+            device_map=self.device,
+            low_cpu_mem_usage=True
+        )
 
         self.model.eval()
         print(f"Model loaded on {self.device}")
