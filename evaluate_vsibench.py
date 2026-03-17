@@ -518,6 +518,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default="./results", help="Output directory for results")
     parser.add_argument("--subset", type=str, default=None, help="Evaluate on a subset (e.g., 'configurational')")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of samples for testing")
+    parser.add_argument("--hf_token", type=str, default=None, help="HuggingFace token for dataset access")
 
     args = parser.parse_args()
 
@@ -525,12 +526,28 @@ def main():
 
     # Load dataset
     print("Loading VSI-Bench dataset...")
+
+    # Determine token: CLI arg > env var > use_auth_token
+    hf_token = args.hf_token or os.environ.get("HF_TOKEN") or True
+
     try:
-        dataset = load_dataset("nyu-visionx/VSI-Bench", split="test", token=True)
+        dataset = load_dataset("nyu-visionx/VSI-Bench", split="test", token=hf_token)
         print(f"Loaded {len(dataset)} samples")
     except Exception as e:
         print(f"Error loading dataset: {e}")
-        print("Make sure you have access to nyu-visionx/VSI-Bench on HuggingFace")
+        print("\n" + "=" * 80)
+        print("AUTHENTICATION REQUIRED")
+        print("=" * 80)
+        print("VSI-Bench requires HuggingFace authentication. Please use one of these methods:")
+        print("\n1. Login via CLI (recommended):")
+        print("   huggingface-cli login")
+        print("\n2. Set environment variable:")
+        print("   export HF_TOKEN='your_token_here'")
+        print("\n3. Pass token as argument:")
+        print("   --hf_token 'your_token_here'")
+        print("\nGet your token from: https://huggingface.co/settings/tokens")
+        print("Make sure you have access to: https://huggingface.co/datasets/nyu-visionx/VSI-Bench")
+        print("=" * 80)
         sys.exit(1)
 
     # Filter subset if specified

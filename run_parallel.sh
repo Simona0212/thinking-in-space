@@ -39,12 +39,20 @@ run_evaluation() {
     echo "Starting evaluation: $model on GPU $gpu_id"
     echo "Log file: $log_file"
 
-    python $PYTHON_SCRIPT \
-        --model_name "$model" \
+    # Build command with optional HF_TOKEN
+    local cmd="python $PYTHON_SCRIPT \
+        --model_name \"$model\" \
         --gpu_id $gpu_id \
-        --dataset_path "$DATASET_PATH" \
-        --output_dir "$OUTPUT_DIR" \
-        > "$log_file" 2>&1
+        --dataset_path \"$DATASET_PATH\" \
+        --output_dir \"$OUTPUT_DIR\""
+
+    # Add HF_TOKEN if set in environment
+    if [ ! -z "$HF_TOKEN" ]; then
+        cmd="$cmd --hf_token \"$HF_TOKEN\""
+    fi
+
+    # Execute command
+    eval $cmd > "$log_file" 2>&1
 
     local exit_code=$?
     if [ $exit_code -eq 0 ]; then
@@ -82,6 +90,17 @@ main() {
     echo "  Available GPUs: $NUM_GPUS"
     echo "  Dataset path: $DATASET_PATH"
     echo "  Output directory: $OUTPUT_DIR"
+
+    # Check HF_TOKEN
+    if [ -z "$HF_TOKEN" ]; then
+        echo "  HF Token: Using cached credentials (huggingface-cli login)"
+        echo ""
+        echo "⚠️  NOTE: If evaluation fails with authentication error, run:"
+        echo "    huggingface-cli login"
+        echo "    or set: export HF_TOKEN='your_token'"
+    else
+        echo "  HF Token: Set (from environment variable)"
+    fi
     echo ""
 
     # Array to store background process PIDs
