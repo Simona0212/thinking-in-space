@@ -46,10 +46,13 @@ class VSIBenchEvaluator:
         self.model_name = model_name
         self.gpu_id = gpu_id
         self.dataset_path = dataset_path
-        self.device = f"cuda:{gpu_id}"
 
-        # Set CUDA device
+        # Set CUDA device visibility FIRST
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+        # After setting CUDA_VISIBLE_DEVICES, the visible GPU is always indexed as 0
+        # So we must use "cuda:0" or "cuda", NOT f"cuda:{gpu_id}"
+        self.device = "cuda:0"
 
         self.model = None
         self.processor = None
@@ -268,14 +271,67 @@ class LLaVAOneVisionEvaluator(VSIBenchEvaluator):
             self.processor = None
             print("Warning: AutoProcessor not available, will process frames manually")
 
-        # Use dtype="auto" as specified in CLAUDE.md
-        self.model = AutoModel.from_pretrained(
-            self.model_name,
-            trust_remote_code=True,
-            dtype="auto",  # As specified in CLAUDE.md
-            device_map=self.device,
-            low_cpu_mem_usage=True
-        )
+        # Try loading with different configurations
+        model_loaded = False
+        last_error = None
+
+        # Attempt 1: dtype="auto" as specified in CLAUDE.md
+        try:
+            print("Attempt 1: Loading with dtype='auto'...")
+            self.model = AutoModel.from_pretrained(
+                self.model_name,
+                trust_remote_code=True,
+                dtype="auto",
+                device_map=self.device,
+                low_cpu_mem_usage=True
+            )
+            model_loaded = True
+            print("✓ Successfully loaded with dtype='auto'")
+        except Exception as e:
+            last_error = e
+            print(f"Attempt 1 failed: {str(e)[:200]}")
+
+        # Attempt 2: Add attn_implementation="eager" to avoid flash-attn issues
+        if not model_loaded:
+            try:
+                print("Attempt 2: Loading with attn_implementation='eager'...")
+                self.model = AutoModel.from_pretrained(
+                    self.model_name,
+                    trust_remote_code=True,
+                    dtype="auto",
+                    device_map=self.device,
+                    low_cpu_mem_usage=True,
+                    attn_implementation="eager"
+                )
+                model_loaded = True
+                print("✓ Successfully loaded with attn_implementation='eager'")
+            except Exception as e:
+                last_error = e
+                print(f"Attempt 2 failed: {str(e)[:200]}")
+
+        # Attempt 3: Try with torch_dtype instead
+        if not model_loaded:
+            try:
+                import torch
+                print("Attempt 3: Loading with torch_dtype=torch.bfloat16...")
+                self.model = AutoModel.from_pretrained(
+                    self.model_name,
+                    trust_remote_code=True,
+                    torch_dtype=torch.bfloat16,
+                    device_map=self.device,
+                    low_cpu_mem_usage=True,
+                    attn_implementation="eager"
+                )
+                model_loaded = True
+                print("✓ Successfully loaded with torch_dtype=torch.bfloat16")
+            except Exception as e:
+                last_error = e
+                print(f"Attempt 3 failed: {str(e)[:200]}")
+
+        if not model_loaded:
+            print(f"\n❌ All loading attempts failed!")
+            print(f"Last error: {last_error}")
+            raise last_error
 
         self.model.eval()
         print(f"Model loaded on {self.device}")

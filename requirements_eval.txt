@@ -16,6 +16,7 @@ decord>=0.6.0
 # Model-specific dependencies
 qwen-vl-utils  # For Qwen3-VL models
 einops  # Required by some vision models
+timm  # PyTorch Image Models, required by LLaVA-OneVision
 
 # Optional but recommended
 huggingface-hub>=0.20.0
