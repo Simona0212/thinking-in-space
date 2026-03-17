@@ -94,47 +94,159 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
     """Evaluator for Qwen3-VL series models"""
 
     def load_model(self):
-        from transformers import AutoProcessor, AutoModelForImageTextToText
-
         print(f"Loading {self.model_name}...")
-        self.processor = AutoProcessor.from_pretrained(self.model_name)
-        self.model = AutoModelForImageTextToText.from_pretrained(
+
+        # Try different import methods for compatibility
+        try:
+            from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+            model_class = Qwen2VLForConditionalGeneration
+            print("Using Qwen2VLForConditionalGeneration")
+        except ImportError:
+            try:
+                from transformers import AutoProcessor, AutoModelForVision2Seq
+                model_class = AutoModelForVision2Seq
+                print("Using AutoModelForVision2Seq")
+            except ImportError:
+                # Fallback: use AutoModel with trust_remote_code
+                from transformers import AutoProcessor, AutoModel
+                model_class = AutoModel
+                print("Using AutoModel with trust_remote_code=True")
+
+        self.processor = AutoProcessor.from_pretrained(
+            self.model_name,
+            trust_remote_code=True
+        )
+        self.model = model_class.from_pretrained(
             self.model_name,
             torch_dtype=torch.bfloat16,
-            device_map=self.device
+            device_map=self.device,
+            trust_remote_code=True
         )
         self.model.eval()
         print(f"Model loaded on {self.device}")
 
     def infer_video(self, video_path: str, question: str, options: List[str] = None) -> str:
         """Run inference on video using Qwen3-VL"""
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "video",
-                        "video": f"file://{video_path}",
-                        "fps": 1.0,
-                    },
-                    {"type": "text", "text": question}
-                ]
-            }
-        ]
+        import os
 
-        inputs = self.processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-        ).to(self.device)
+        # Ensure absolute path
+        video_path = os.path.abspath(video_path)
 
+        # Try using qwen-vl-utils if available
+        try:
+            from qwen_vl_utils import process_vision_info
+
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "video",
+                            "video": video_path,  # qwen-vl-utils handles path format
+                            "fps": 1.0,
+                        },
+                        {"type": "text", "text": question}
+                    ]
+                }
+            ]
+
+            # Process vision info
+            text = self.processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            image_inputs, video_inputs = process_vision_info(messages)
+
+            inputs = self.processor(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt"
+            ).to(self.device)
+
+        except ImportError:
+            # Fallback: use file:// URL format without qwen-vl-utils
+            print("Warning: qwen-vl-utils not found, using fallback method")
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "video",
+                            "video": f"file://{video_path}",
+                            "fps": 1.0,
+                        },
+                        {"type": "text", "text": question}
+                    ]
+                }
+            ]
+
+            inputs = self.processor.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            ).to(self.device)
+
+        except Exception as e:
+            print(f"Error processing video with qwen-vl-utils: {e}")
+            print("Falling back to simple method...")
+
+            # Last resort fallback: treat as image sequence
+            import av
+            from PIL import Image
+
+            def extract_frames(video_path, num_frames=8):
+                container = av.open(video_path)
+                frames = []
+                total_frames = container.streams.video[0].frames
+
+                if total_frames == 0:
+                    for frame in container.decode(video=0):
+                        total_frames += 1
+                    container.close()
+                    container = av.open(video_path)
+
+                indices = np.linspace(0, max(0, total_frames - 1), num_frames, dtype=int)
+
+                for i, frame in enumerate(container.decode(video=0)):
+                    if i in indices:
+                        img = Image.fromarray(frame.to_ndarray(format="rgb24"))
+                        frames.append(img)
+                    if len(frames) >= num_frames:
+                        break
+
+                container.close()
+                return frames
+
+            frames = extract_frames(video_path)
+
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        *[{"type": "image", "image": frame} for frame in frames],
+                        {"type": "text", "text": question}
+                    ]
+                }
+            ]
+
+            inputs = self.processor.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            ).to(self.device)
+
+        # Generate response
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=16,
-                temperature=0.0,
+                max_new_tokens=32,
                 do_sample=False
             )
 
@@ -150,15 +262,51 @@ class LLaVAOneVisionEvaluator(VSIBenchEvaluator):
     """Evaluator for LLaVA-OneVision series models"""
 
     def load_model(self):
-        from transformers import AutoModel
-
         print(f"Loading {self.model_name}...")
-        self.model = AutoModel.from_pretrained(
-            self.model_name,
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
-            device_map=self.device
-        )
+
+        # LLaVA-OneVision may need special handling
+        try:
+            # Try importing LLaVA specific classes
+            from transformers import LlavaOnevisionForConditionalGeneration, AutoProcessor
+            print("Using LlavaOnevisionForConditionalGeneration")
+            self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
+            self.model = LlavaOnevisionForConditionalGeneration.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.bfloat16,  # Note: torch_dtype will be auto-converted to dtype
+                device_map=self.device,
+                trust_remote_code=True
+            )
+        except ImportError:
+            # Fallback to AutoModel
+            from transformers import AutoModel, AutoProcessor
+            print("Using AutoModel with trust_remote_code=True")
+            try:
+                self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
+            except:
+                self.processor = None
+                print("Warning: AutoProcessor not available, will process frames manually")
+
+            # Use dtype instead of torch_dtype for newer transformers
+            try:
+                self.model = AutoModel.from_pretrained(
+                    self.model_name,
+                    trust_remote_code=True,
+                    dtype=torch.bfloat16,  # Use dtype for transformers >= 5.0
+                    device_map=self.device,
+                    low_cpu_mem_usage=True,
+                    attn_implementation="eager"  # Use eager attention to avoid flash-attn issues
+                )
+            except TypeError:
+                # Fallback to torch_dtype for older transformers
+                self.model = AutoModel.from_pretrained(
+                    self.model_name,
+                    trust_remote_code=True,
+                    torch_dtype=torch.bfloat16,
+                    device_map=self.device,
+                    low_cpu_mem_usage=True,
+                    attn_implementation="eager"
+                )
+
         self.model.eval()
         print(f"Model loaded on {self.device}")
 
@@ -166,17 +314,26 @@ class LLaVAOneVisionEvaluator(VSIBenchEvaluator):
         """Run inference on video using LLaVA-OneVision"""
         # Load video frames
         import av
+        from PIL import Image
 
         def load_video_frames(video_path, num_frames=32):
             container = av.open(video_path)
             frames = []
             total_frames = container.streams.video[0].frames
-            indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+
+            if total_frames == 0:
+                # Fallback: count frames manually
+                for frame in container.decode(video=0):
+                    total_frames += 1
+                container.close()
+                container = av.open(video_path)
+
+            indices = np.linspace(0, max(0, total_frames - 1), num_frames, dtype=int)
 
             for i, frame in enumerate(container.decode(video=0)):
                 if i in indices:
                     frames.append(frame.to_ndarray(format="rgb24"))
-                if i > indices[-1]:
+                if len(frames) >= num_frames:
                     break
 
             container.close()
@@ -184,17 +341,60 @@ class LLaVAOneVisionEvaluator(VSIBenchEvaluator):
 
         frames = load_video_frames(video_path)
 
-        # Use the model's chat interface
-        response = self.model.chat(
-            image=frames,
-            msgs=[{"role": "user", "content": question}],
-            tokenizer=None,
-            max_new_tokens=16,
-            do_sample=False,
-            temperature=0.0
-        )
+        # Try different inference methods
+        try:
+            # Method 1: Use model's chat interface (preferred for LLaVA-OneVision)
+            if hasattr(self.model, 'chat'):
+                response = self.model.chat(
+                    image=frames,
+                    msgs=[{"role": "user", "content": question}],
+                    tokenizer=None,
+                    max_new_tokens=32,
+                    do_sample=False,
+                    temperature=0.0
+                )
+            # Method 2: Use processor + generate
+            elif self.processor is not None:
+                # Convert frames to PIL Images
+                pil_frames = [Image.fromarray(f) for f in frames]
 
-        return response.strip()
+                # Prepare inputs
+                inputs = self.processor(
+                    text=question,
+                    images=pil_frames,
+                    return_tensors="pt"
+                ).to(self.device)
+
+                # Generate
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_new_tokens=32,
+                        do_sample=False
+                    )
+
+                response = self.processor.decode(outputs[0], skip_special_tokens=True)
+            else:
+                raise RuntimeError("No suitable inference method found for LLaVA-OneVision")
+
+        except Exception as e:
+            print(f"Warning: Inference failed with error: {e}")
+            print("Attempting fallback method...")
+
+            # Fallback: Simple generate with first and last frame
+            try:
+                first_frame = Image.fromarray(frames[0])
+                last_frame = Image.fromarray(frames[-1])
+
+                if hasattr(self.model, 'generate_content'):
+                    response = self.model.generate_content([first_frame, last_frame, question])
+                else:
+                    response = "Error: Unable to process video"
+            except Exception as e2:
+                print(f"Fallback also failed: {e2}")
+                response = "Error: Unable to process video"
+
+        return str(response).strip()
 
 
 class BAGELEvaluator(VSIBenchEvaluator):

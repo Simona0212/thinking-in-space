@@ -1,6 +1,6 @@
 # Core dependencies for VSI-Bench evaluation
 torch>=2.0.0
-transformers>=4.40.0
+transformers>=4.45.0  # Qwen3-VL requires newer transformers
 accelerate>=0.27.0
 datasets>=2.14.0
 pandas>=2.0.0
@@ -15,6 +15,7 @@ decord>=0.6.0
 
 # Model-specific dependencies
 qwen-vl-utils  # For Qwen3-VL models
+einops  # Required by some vision models
 
 # Optional but recommended
 huggingface-hub>=0.20.0
