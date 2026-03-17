@@ -3,7 +3,8 @@
     "allow": [
       "Bash(chmod +x:*)",
       "Bash(cat:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(bash:*)"
     ]
   }
 }

@@ -24,11 +24,9 @@ MODELS=(
 detect_gpus() {
     if command -v nvidia-smi &> /dev/null; then
         NUM_GPUS=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-        echo "Detected $NUM_GPUS GPUs"
-        return $NUM_GPUS
+        echo "$NUM_GPUS"  # 输出GPU数量，而不是return
     else
-        echo "nvidia-smi not found. Defaulting to 1 GPU."
-        return 1
+        echo "1"  # 默认1个GPU
     fi
 }
 
@@ -66,10 +64,10 @@ main() {
     echo ""
 
     # Detect GPUs
-    detect_gpus
-    NUM_GPUS=$?
+    NUM_GPUS=$(detect_gpus)
+    echo "Detected $NUM_GPUS GPUs"
 
-    if [ $NUM_GPUS -eq 0 ]; then
+    if [ "$NUM_GPUS" -eq 0 ]; then
         echo "Error: No GPUs detected!"
         exit 1
     fi
