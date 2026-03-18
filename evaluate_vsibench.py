@@ -178,6 +178,13 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
             video_inputs = list(videos_list)
             video_metadatas = list(video_metadatas)
 
+            # CRITICAL FIX: process_vision_info() already sampled the video,
+            # so frames_indices must be sequential (0, 1, 2, ..., num_frames-1)
+            # Otherwise processor tries to use original indices on sampled video
+            for i, meta in enumerate(video_metadatas):
+                num_frames = video_inputs[i].shape[0] if hasattr(video_inputs[i], 'shape') else len(video_inputs[i])
+                meta['frames_indices'] = list(range(num_frames))
+
         # Debug output
         print(f"  [DEBUG] image_inputs: {type(image_inputs)}, video_inputs: {type(video_inputs)}")
         if video_inputs is not None and len(video_inputs) > 0:
