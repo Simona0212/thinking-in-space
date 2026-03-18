@@ -578,7 +578,16 @@ def compute_metrics(doc: Dict, prediction: str) -> Dict:
 
 def aggregate_results(results: List[Dict]) -> Dict:
     """Aggregate results across all samples"""
+    if not results:
+        print("WARNING: No successful results to aggregate!")
+        return {"overall": 0.0, "error": "All samples failed"}
+
     df = pd.DataFrame(results)
+
+    # Check if required columns exist
+    if "question_type" not in df.columns:
+        print(f"WARNING: 'question_type' column missing. Available columns: {list(df.columns)}")
+        return {"overall": 0.0, "error": "Missing question_type column"}
 
     output = {}
 
@@ -719,8 +728,17 @@ def main():
             video_path = evaluator.get_video_path(doc)
             prompt = evaluator.format_prompt(doc)
 
+            # Debug info
+            if idx < 3:  # Only for first 3 samples
+                print(f"\n[DEBUG] Sample {idx}:", flush=True)
+                print(f"  Video path: {video_path}", flush=True)
+                print(f"  Prompt length: {len(prompt)}", flush=True)
+
             # Run inference
             prediction = evaluator.infer_video(video_path, prompt)
+
+            if idx < 3:
+                print(f"  Prediction: {prediction[:100]}..." if len(prediction) > 100 else f"  Prediction: {prediction}", flush=True)
 
             # Compute metrics
             metrics = compute_metrics(doc, prediction)
@@ -739,11 +757,14 @@ def main():
 
         except Exception as e:
             import traceback
-            print(f"\nError processing sample {idx}:")
-            print(f"  Exception type: {type(e).__name__}")
-            print(f"  Exception message: {e}")
-            print(f"  Traceback:")
+            import sys
+            print(f"\nError processing sample {idx}:", flush=True)
+            print(f"  Exception type: {type(e).__name__}", flush=True)
+            print(f"  Exception message: {e}", flush=True)
+            print(f"  Traceback:", flush=True)
             traceback.print_exc()
+            sys.stdout.flush()
+            sys.stderr.flush()
             continue
 
     # Aggregate results
