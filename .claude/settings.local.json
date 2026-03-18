@@ -4,7 +4,9 @@
       "Bash(chmod +x:*)",
       "Bash(cat:*)",
       "Bash(python:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(xargs grep:*)",
+      "Bash(python3:*)"
     ]
   }
 }

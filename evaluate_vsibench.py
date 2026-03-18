@@ -16,7 +16,6 @@ import warnings
 import numpy as np
 import pandas as pd
 import torch
-from datasets import load_dataset
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
@@ -122,24 +121,24 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
     def infer_video(self, video_path: str, question: str, options: List[str] = None) -> str:
         """Run inference on video using Qwen3-VL
 
-        Strictly follows CLAUDE.md example:
-        - Use {"type": "video", "video": "file://path", "fps": 1.0} format
-        - Use processor.apply_chat_template with tokenize=True, return_dict=True
-        - Use model.generate(**inputs)
+        Uses the correct two-step processing:
+        1. Get text template (tokenize=False)
+        2. Process vision info to extract video data
+        3. Full processing through processor(text=..., videos=...)
         """
         import os
 
-        # Ensure absolute path
+        # Ensure absolute path (no file:// prefix needed for process_vision_info)
         video_path = os.path.abspath(video_path)
 
-        # CLAUDE.md specifies video format: {"type": "video", "video": "file://path/to/video.mp4", "fps": 1.0}
+        # Build messages with video - use direct path for process_vision_info
         messages = [
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "video",
-                        "video": f"file://{video_path}",
+                        "video": video_path,  # Direct path, no file:// prefix
                         "fps": 1.0,
                     },
                     {"type": "text", "text": question}
@@ -147,16 +146,27 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
             }
         ]
 
-        # CLAUDE.md example: processor.apply_chat_template with tokenize=True, return_dict=True
-        inputs = self.processor.apply_chat_template(
+        # Step 1: Get text template (DO NOT tokenize yet)
+        text = self.processor.apply_chat_template(
             messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
+            tokenize=False,  # Critical: get text only first
+            add_generation_prompt=True
+        )
+
+        # Step 2: Extract video data using qwen_vl_utils
+        from qwen_vl_utils import process_vision_info
+        image_inputs, video_inputs = process_vision_info(messages)
+
+        # Step 3: Full processing with processor
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt"
         ).to(self.device)
 
-        # Generate response - exactly as in CLAUDE.md
+        # Generate response
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -164,13 +174,18 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
                 do_sample=False
             )
 
-        # Decode - exactly as in CLAUDE.md: outputs[0][inputs["input_ids"].shape[-1]:]
-        response = self.processor.decode(
-            outputs[0][inputs["input_ids"].shape[-1]:],
-            skip_special_tokens=True
+        # Decode - use batch_decode for consistency
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):]
+            for in_ids, out_ids in zip(inputs.input_ids, outputs)
+        ]
+        output_text = self.processor.batch_decode(
+            generated_ids_trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False
         )
 
-        return response.strip()
+        return output_text[0].strip()
 
 
 class LLaVAOneVisionEvaluator(VSIBenchEvaluator):
@@ -670,49 +685,47 @@ def main():
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID to use")
     parser.add_argument("--dataset_path", type=str, default="/cephfs/shared/vsi-bench", help="Path to VSI-Bench dataset")
     parser.add_argument("--output_dir", type=str, default="./results", help="Output directory for results")
-    parser.add_argument("--subset", type=str, default=None, help="Evaluate on a subset (e.g., 'configurational')")
+    parser.add_argument("--subset", type=str, default=None, help="Evaluate on a subset (e.g., question type like 'object_counting')")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of samples for testing")
-    parser.add_argument("--hf_token", type=str, default=None, help="HuggingFace token for dataset access")
+    parser.add_argument("--hf_token", type=str, default=None, help="HuggingFace token (unused, kept for compatibility)")
 
     args = parser.parse_args()
 
     print(f"Starting evaluation for {args.model_name} on GPU {args.gpu_id}")
 
-    # Load dataset
-    print("Loading VSI-Bench dataset...")
+    # Load dataset from local JSONL file
+    print("Loading VSI-Bench dataset from local file...")
 
-    # Determine token: CLI arg > env var > use_auth_token
-    hf_token = args.hf_token or os.environ.get("HF_TOKEN") or True
-
-    try:
-        dataset = load_dataset("nyu-visionx/VSI-Bench", split="test", token=hf_token)
-        print(f"Loaded {len(dataset)} samples")
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        print("\n" + "=" * 80)
-        print("AUTHENTICATION REQUIRED")
-        print("=" * 80)
-        print("VSI-Bench requires HuggingFace authentication. Please use one of these methods:")
-        print("\n1. Login via CLI (recommended):")
-        print("   huggingface-cli login")
-        print("\n2. Set environment variable:")
-        print("   export HF_TOKEN='your_token_here'")
-        print("\n3. Pass token as argument:")
-        print("   --hf_token 'your_token_here'")
-        print("\nGet your token from: https://huggingface.co/settings/tokens")
-        print("Make sure you have access to: https://huggingface.co/datasets/nyu-visionx/VSI-Bench")
-        print("=" * 80)
+    dataset_file = os.path.join(args.dataset_path, "test.jsonl")
+    if not os.path.exists(dataset_file):
+        print(f"Error: Dataset file not found: {dataset_file}")
+        print(f"Expected path: {dataset_file}")
+        print(f"Make sure the VSI-Bench dataset is available at {args.dataset_path}")
         sys.exit(1)
 
-    # Filter subset if specified
+    # Load JSONL
+    dataset = []
+    with open(dataset_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                dataset.append(json.loads(line))
+
+    print(f"Loaded {len(dataset)} samples from {dataset_file}")
+
+    # Filter subset if specified (by question_type or category)
     if args.subset:
-        dataset = dataset.filter(lambda x: args.subset in x.get("category", ""))
-        print(f"Filtered to {len(dataset)} samples for subset: {args.subset}")
+        original_count = len(dataset)
+        dataset = [
+            doc for doc in dataset
+            if args.subset in doc.get("question_type", "") or args.subset in doc.get("category", "")
+        ]
+        print(f"Filtered to {len(dataset)} samples for subset: {args.subset} (from {original_count})")
 
     # Limit samples if specified
     if args.limit:
-        dataset = dataset.select(range(min(args.limit, len(dataset))))
-        print(f"Limited to {args.limit} samples")
+        dataset = dataset[:args.limit]
+        print(f"Limited to {len(dataset)} samples")
 
     # Initialize evaluator
     evaluator = get_evaluator(args.model_name, args.gpu_id, args.dataset_path)

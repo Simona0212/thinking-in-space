@@ -1,6 +1,6 @@
 # Core dependencies for VSI-Bench evaluation
 torch>=2.0.0
-transformers>=4.45.0  # Qwen3-VL requires newer transformers
+transformers==4.47.1  # Qwen3-VL requires 4.x (NOT 5.x - incompatible)
 accelerate>=0.27.0
 datasets>=2.14.0
 pandas>=2.0.0
