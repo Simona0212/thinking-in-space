@@ -98,20 +98,20 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
 
     def load_model(self):
         print(f"Loading {self.model_name}...")
-        from transformers import AutoProcessor, AutoModel
+        from transformers import AutoProcessor, AutoModelForImageTextToText
 
-        # IMPORTANT: Qwen3-VL must use AutoModel with trust_remote_code=True
-        # CLAUDE.md specifies using AutoModel (not AutoModelForImageTextToText which doesn't exist)
-        print("Using AutoModel with trust_remote_code=True (required for Qwen3-VL)")
+        # CLAUDE.md specifies using AutoModelForImageTextToText (NOT AutoModel!)
+        # AutoModel returns Qwen3VLModel which has NO generate() method
+        # AutoModelForImageTextToText returns the generation model WITH generate() method
+        print("Using AutoModelForImageTextToText as specified in CLAUDE.md")
 
         self.processor = AutoProcessor.from_pretrained(
             self.model_name,
             trust_remote_code=True
         )
 
-        # Use AutoModel to let HuggingFace load the correct Qwen3-VL class
-        # Let the model decide the best dtype automatically
-        self.model = AutoModel.from_pretrained(
+        # Use AutoModelForImageTextToText - this has the generate() method
+        self.model = AutoModelForImageTextToText.from_pretrained(
             self.model_name,
             trust_remote_code=True,
             device_map=self.device,

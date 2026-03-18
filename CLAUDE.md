@@ -115,6 +115,8 @@ outputs = model.generate(**inputs, max_new_tokens=40)
 print(processor.decode(outputs[0][inputs["input_ids"].shape[-1]:]))
 ```
 
+
+
 **Qwen/Qwen3-VL-8B-Thinking**
 
 ```py
