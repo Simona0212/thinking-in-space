@@ -6,7 +6,8 @@
       "Bash(python:*)",
       "Bash(bash:*)",
       "Bash(xargs grep:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "WebSearch"
     ]
   }
 }

@@ -121,25 +121,26 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
     def infer_video(self, video_path: str, question: str, options: List[str] = None) -> str:
         """Run inference on video using Qwen3-VL
 
-        Uses the correct two-step processing:
+        Uses the correct two-step processing following the Qwen2.5-VL reference implementation:
         1. Get text template (tokenize=False)
         2. Process vision info to extract video data
         3. Full processing through processor(text=..., videos=...)
         """
         import os
 
-        # Ensure absolute path (no file:// prefix needed for process_vision_info)
+        # Ensure absolute path
         video_path = os.path.abspath(video_path)
 
-        # Build messages with video - use direct path for process_vision_info
+        # Build messages with video
+        # nframes controls how many frames to sample from the video
         messages = [
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "video",
-                        "video": video_path,  # Direct path, no file:// prefix
-                        "fps": 1.0,
+                        "video": video_path,
+                        "nframes": 16,  # Sample 16 frames from video
                     },
                     {"type": "text", "text": question}
                 ]
@@ -157,6 +158,11 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
         from qwen_vl_utils import process_vision_info
         image_inputs, video_inputs = process_vision_info(messages)
 
+        # Debug: print what we got
+        print(f"  [DEBUG] image_inputs: {type(image_inputs)}, video_inputs: {type(video_inputs)}")
+        if video_inputs is not None:
+            print(f"  [DEBUG] video_inputs length: {len(video_inputs) if hasattr(video_inputs, '__len__') else 'N/A'}")
+
         # Step 3: Full processing with processor
         inputs = self.processor(
             text=[text],
@@ -164,14 +170,20 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
             videos=video_inputs,
             padding=True,
             return_tensors="pt"
-        ).to(self.device)
+        )
+
+        # Debug: print input keys
+        print(f"  [DEBUG] Input keys: {list(inputs.keys())}")
+
+        # Move inputs to device using .to() method (BatchFeature supports this)
+        inputs = inputs.to(self.device)
 
         # Generate response
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=128,
-                do_sample=False
+                do_sample=False,
             )
 
         # Decode - use batch_decode for consistency
