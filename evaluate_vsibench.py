@@ -128,10 +128,11 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
     def infer_video(self, video_path: str, question: str, options: List[str] = None) -> str:
         """Run inference on video using Qwen3-VL
 
-        Uses the correct two-step processing following the Qwen2.5-VL reference implementation:
+        For Qwen3-VL, the correct process is:
         1. Get text template (tokenize=False)
-        2. Process vision info to extract video data
-        3. Full processing through processor(text=..., videos=...)
+        2. Process vision info with image_patch_size=16, return_video_kwargs=True, return_video_metadata=True
+        3. Split videos and video_metadatas
+        4. Pass video_metadata to processor with do_resize=False
         """
         import os
 
@@ -139,7 +140,6 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
         video_path = os.path.abspath(video_path)
 
         # Build messages with video
-        # Use nframes to specify exact number of frames to sample
         messages = [
             {
                 "role": "user",
@@ -147,7 +147,7 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
                     {
                         "type": "video",
                         "video": video_path,
-                        "nframes": 16,  # Sample exactly 16 frames
+                        "max_pixels": 360 * 420,  # Control video resolution
                     },
                     {"type": "text", "text": question}
                 ]
@@ -157,24 +157,41 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
         # Step 1: Get text template (DO NOT tokenize yet)
         text = self.processor.apply_chat_template(
             messages,
-            tokenize=False,  # Critical: get text only first
+            tokenize=False,
             add_generation_prompt=True
         )
 
         # Step 2: Extract video data using qwen_vl_utils
+        # For Qwen3-VL: use image_patch_size=16, return_video_kwargs=True, return_video_metadata=True
         from qwen_vl_utils import process_vision_info
-        image_inputs, video_inputs = process_vision_info(messages)
+        image_inputs, video_inputs, video_kwargs = process_vision_info(
+            messages,
+            image_patch_size=16,  # Qwen3-VL uses 16, Qwen2.5-VL uses 14
+            return_video_kwargs=True,
+            return_video_metadata=True
+        )
 
-        # Debug: print what we got
+        # Step 3: Split videos and video_metadatas
+        video_metadatas = None
+        if video_inputs is not None:
+            videos_list, video_metadatas = zip(*video_inputs)
+            video_inputs = list(videos_list)
+            video_metadatas = list(video_metadatas)
+
+        # Debug output
         print(f"  [DEBUG] image_inputs: {type(image_inputs)}, video_inputs: {type(video_inputs)}")
         if video_inputs is not None and len(video_inputs) > 0:
             print(f"  [DEBUG] video_inputs[0] shape: {video_inputs[0].shape if hasattr(video_inputs[0], 'shape') else 'N/A'}")
+        print(f"  [DEBUG] video_metadatas: {video_metadatas}")
 
-        # Step 3: Full processing with processor
+        # Step 4: Full processing with processor
+        # IMPORTANT: pass video_metadata and do_resize=False
         inputs = self.processor(
             text=[text],
             images=image_inputs,
             videos=video_inputs,
+            video_metadata=video_metadatas,  # Critical for Qwen3-VL!
+            do_resize=False,  # qwen-vl-utils already resized
             padding=True,
             return_tensors="pt"
         )
@@ -185,7 +202,7 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
             if hasattr(v, 'shape'):
                 print(f"  [DEBUG] {k} shape: {v.shape}")
 
-        # Move inputs to device using .to() method (BatchFeature supports this)
+        # Move inputs to device
         inputs = inputs.to(self.device)
 
         # Generate response
@@ -196,7 +213,7 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
                 do_sample=False,
             )
 
-        # Decode - use batch_decode for consistency
+        # Decode
         generated_ids_trimmed = [
             out_ids[len(in_ids):]
             for in_ids, out_ids in zip(inputs.input_ids, outputs)
@@ -811,11 +828,19 @@ def main():
     print("EVALUATION RESULTS")
     print("="*50)
     print(f"Model: {args.model_name}")
-    print(f"Overall Score: {aggregated['overall']*100:.2f}%")
-    print("\nPer-task scores:")
-    for key, value in aggregated.items():
-        if key != "overall":
-            print(f"  {key}: {value*100:.2f}%")
+
+    if "error" in aggregated:
+        print(f"Error: {aggregated['error']}")
+        print(f"Overall Score: {aggregated.get('overall', 0.0)*100:.2f}%")
+    else:
+        print(f"Overall Score: {aggregated['overall']*100:.2f}%")
+        print("\nPer-task scores:")
+        for key, value in aggregated.items():
+            if key != "overall":
+                if isinstance(value, (int, float)):
+                    print(f"  {key}: {value*100:.2f}%")
+                else:
+                    print(f"  {key}: {value}")
 
     # Save results
     print("\n" + "="*50)
