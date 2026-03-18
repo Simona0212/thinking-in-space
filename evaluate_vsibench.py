@@ -190,9 +190,11 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
         if video_inputs is not None and len(video_inputs) > 0:
             print(f"  [DEBUG] video_inputs[0] shape: {video_inputs[0].shape if hasattr(video_inputs[0], 'shape') else 'N/A'}")
         print(f"  [DEBUG] video_metadatas: {video_metadatas}")
+        print(f"  [DEBUG] video_kwargs: {video_kwargs}")
 
         # Step 4: Full processing with processor
-        # IMPORTANT: pass video_metadata and do_resize=False
+        # IMPORTANT: pass video_metadata, do_resize=False, and **video_kwargs
+        # video_kwargs contains parameters that tell processor to skip re-sampling
         inputs = self.processor(
             text=[text],
             images=image_inputs,
@@ -200,7 +202,8 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
             video_metadata=video_metadatas,  # Critical for Qwen3-VL!
             do_resize=False,  # qwen-vl-utils already resized
             padding=True,
-            return_tensors="pt"
+            return_tensors="pt",
+            **video_kwargs  # Critical: contains do_sample_frames=False etc.
         )
 
         # Debug: print input keys and shapes
