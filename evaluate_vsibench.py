@@ -97,20 +97,27 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
 
     def load_model(self):
         print(f"Loading {self.model_name}...")
-        from transformers import AutoProcessor, AutoModelForImageTextToText
+        from transformers import AutoProcessor
 
-        # CLAUDE.md specifies using AutoModelForImageTextToText (NOT AutoModel!)
-        print("Using AutoModelForImageTextToText as specified in CLAUDE.md")
+        # Try to import Qwen3VLForConditionalGeneration, fall back to auto class
+        try:
+            from transformers import Qwen3VLForConditionalGeneration
+            model_class = Qwen3VLForConditionalGeneration
+            print("Using Qwen3VLForConditionalGeneration")
+        except ImportError:
+            from transformers import AutoModelForVision2Seq
+            model_class = AutoModelForVision2Seq
+            print("Using AutoModelForVision2Seq (fallback)")
 
         self.processor = AutoProcessor.from_pretrained(
             self.model_name,
             trust_remote_code=True
         )
 
-        # Use AutoModelForImageTextToText - this has the generate() method
-        self.model = AutoModelForImageTextToText.from_pretrained(
+        self.model = model_class.from_pretrained(
             self.model_name,
             trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
             device_map=self.device,
             low_cpu_mem_usage=True
         )
@@ -132,7 +139,7 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
         video_path = os.path.abspath(video_path)
 
         # Build messages with video
-        # nframes controls how many frames to sample from the video
+        # Use nframes to specify exact number of frames to sample
         messages = [
             {
                 "role": "user",
@@ -140,7 +147,7 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
                     {
                         "type": "video",
                         "video": video_path,
-                        "nframes": 16,  # Sample 16 frames from video
+                        "nframes": 16,  # Sample exactly 16 frames
                     },
                     {"type": "text", "text": question}
                 ]
@@ -160,8 +167,8 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
 
         # Debug: print what we got
         print(f"  [DEBUG] image_inputs: {type(image_inputs)}, video_inputs: {type(video_inputs)}")
-        if video_inputs is not None:
-            print(f"  [DEBUG] video_inputs length: {len(video_inputs) if hasattr(video_inputs, '__len__') else 'N/A'}")
+        if video_inputs is not None and len(video_inputs) > 0:
+            print(f"  [DEBUG] video_inputs[0] shape: {video_inputs[0].shape if hasattr(video_inputs[0], 'shape') else 'N/A'}")
 
         # Step 3: Full processing with processor
         inputs = self.processor(
@@ -172,8 +179,11 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
             return_tensors="pt"
         )
 
-        # Debug: print input keys
+        # Debug: print input keys and shapes
         print(f"  [DEBUG] Input keys: {list(inputs.keys())}")
+        for k, v in inputs.items():
+            if hasattr(v, 'shape'):
+                print(f"  [DEBUG] {k} shape: {v.shape}")
 
         # Move inputs to device using .to() method (BatchFeature supports this)
         inputs = inputs.to(self.device)
