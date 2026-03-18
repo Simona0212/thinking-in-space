@@ -101,8 +101,6 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
         from transformers import AutoProcessor, AutoModelForImageTextToText
 
         # CLAUDE.md specifies using AutoModelForImageTextToText (NOT AutoModel!)
-        # AutoModel returns Qwen3VLModel which has NO generate() method
-        # AutoModelForImageTextToText returns the generation model WITH generate() method
         print("Using AutoModelForImageTextToText as specified in CLAUDE.md")
 
         self.processor = AutoProcessor.from_pretrained(
@@ -122,130 +120,51 @@ class Qwen3VLEvaluator(VSIBenchEvaluator):
         print(f"Model loaded on {self.device}")
 
     def infer_video(self, video_path: str, question: str, options: List[str] = None) -> str:
-        """Run inference on video using Qwen3-VL"""
+        """Run inference on video using Qwen3-VL
+
+        Strictly follows CLAUDE.md example:
+        - Use {"type": "video", "video": "file://path", "fps": 1.0} format
+        - Use processor.apply_chat_template with tokenize=True, return_dict=True
+        - Use model.generate(**inputs)
+        """
         import os
 
         # Ensure absolute path
         video_path = os.path.abspath(video_path)
 
-        # Try using qwen-vl-utils if available
-        try:
-            from qwen_vl_utils import process_vision_info
+        # CLAUDE.md specifies video format: {"type": "video", "video": "file://path/to/video.mp4", "fps": 1.0}
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video",
+                        "video": f"file://{video_path}",
+                        "fps": 1.0,
+                    },
+                    {"type": "text", "text": question}
+                ]
+            }
+        ]
 
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "video",
-                            "video": video_path,  # qwen-vl-utils handles path format
-                            "fps": 1.0,
-                        },
-                        {"type": "text", "text": question}
-                    ]
-                }
-            ]
+        # CLAUDE.md example: processor.apply_chat_template with tokenize=True, return_dict=True
+        inputs = self.processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to(self.device)
 
-            # Process vision info
-            text = self.processor.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-            image_inputs, video_inputs = process_vision_info(messages)
-
-            inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt"
-            ).to(self.device)
-
-        except ImportError:
-            # Fallback: use file:// URL format without qwen-vl-utils
-            print("Warning: qwen-vl-utils not found, using fallback method")
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "video",
-                            "video": f"file://{video_path}",
-                            "fps": 1.0,
-                        },
-                        {"type": "text", "text": question}
-                    ]
-                }
-            ]
-
-            inputs = self.processor.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-            ).to(self.device)
-
-        except Exception as e:
-            print(f"Error processing video with qwen-vl-utils: {e}")
-            print("Falling back to simple method...")
-
-            # Last resort fallback: treat as image sequence
-            import av
-            from PIL import Image
-
-            def extract_frames(video_path, num_frames=8):
-                container = av.open(video_path)
-                frames = []
-                total_frames = container.streams.video[0].frames
-
-                if total_frames == 0:
-                    for frame in container.decode(video=0):
-                        total_frames += 1
-                    container.close()
-                    container = av.open(video_path)
-
-                indices = np.linspace(0, max(0, total_frames - 1), num_frames, dtype=int)
-
-                for i, frame in enumerate(container.decode(video=0)):
-                    if i in indices:
-                        img = Image.fromarray(frame.to_ndarray(format="rgb24"))
-                        frames.append(img)
-                    if len(frames) >= num_frames:
-                        break
-
-                container.close()
-                return frames
-
-            frames = extract_frames(video_path)
-
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        *[{"type": "image", "image": frame} for frame in frames],
-                        {"type": "text", "text": question}
-                    ]
-                }
-            ]
-
-            inputs = self.processor.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-            ).to(self.device)
-
-        # Generate response
+        # Generate response - exactly as in CLAUDE.md
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=32,
+                max_new_tokens=128,
                 do_sample=False
             )
 
+        # Decode - exactly as in CLAUDE.md: outputs[0][inputs["input_ids"].shape[-1]:]
         response = self.processor.decode(
             outputs[0][inputs["input_ids"].shape[-1]:],
             skip_special_tokens=True
