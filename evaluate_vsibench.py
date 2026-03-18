@@ -819,7 +819,12 @@ def main():
             results.append(result)
 
         except Exception as e:
-            print(f"\nError processing sample {idx}: {e}")
+            import traceback
+            print(f"\nError processing sample {idx}:")
+            print(f"  Exception type: {type(e).__name__}")
+            print(f"  Exception message: {e}")
+            print(f"  Traceback:")
+            traceback.print_exc()
             continue
 
     # Aggregate results
